@@ -1,0 +1,140 @@
+---
+title: "TUBES PEMSTOK"
+author: "Residen Nusantara R M"
+date: "2025-11-26"
+output: html_document
+---
+
+```{r}
+# ============================
+# SCRIPT R: PROSES & PERHITUNGAN M/M/1
+# Untuk file: "dataset pemsyok.xlsx"
+# ============================
+
+library(readxl)
+library(dplyr)
+library(tidyr)
+library(stringr)
+
+# --- 1) Sesuaikan path file ---
+file_path <- "C:/Users/resid/Downloads/dataset pemsyok.xlsx"
+
+# --- 2) Baca seluruh sheet tanpa header (lebih robust terhadap layout) ---
+raw <- read_excel(file_path, col_names = FALSE)
+
+# --- 3) Temukan baris yang mengandung 'jumlah antrian' (case-insensitive) ---
+# Kolom 2 biasanya berisi label seperti "jumlah antrian"
+rows_idx <- which(tolower(as.character(raw[[2]])) == "jumlah antrian")
+
+if(length(rows_idx) == 0){
+  stop("Tidak ditemukan baris 'jumlah antrian'. Cek file Excel: pastikan ada label 'jumlah antrian' di kolom kedua.")
+}
+
+# --- 4) Ambil label waktu (headings) ----
+# Cari baris yang mengandung kata 'waktu' untuk dapatkan header waktu (jika ada)
+time_row_idx <- which(tolower(as.character(raw[[1]])) == "waktu")
+if(length(time_row_idx) > 0){
+  time_labels <- as.character(raw[time_row_idx, 3:ncol(raw)])
+} else {
+  # Jika tidak ada, ambil nama kolom ke-3:... sebagai fallback
+  time_labels <- paste0("t", seq_len(ncol(raw)-2))
+}
+
+# --- 5) Ekstrak setiap baris 'jumlah antrian' jadi dataframe per-hari ---
+list_day <- lapply(rows_idx, function(i){
+  day_name <- as.character(raw[i,1]) %>% str_trim()
+  counts_raw <- raw[i, 3:ncol(raw)]
+  # coerce ke numeric, ubah NA jadi 0
+  counts <- suppressWarnings(as.numeric(unlist(counts_raw)))
+  counts[is.na(counts)] <- 0
+  tibble(time = time_labels, day = day_name, count = counts)
+})
+
+arrivals <- bind_rows(list_day)
+
+# (Optional) jika ada baris kosong / label ganda, periksa unique days
+# cat("Days found:", unique(arrivals$day), "\n")
+
+# --- 6) Ringkasan per-hari: total, mean per minute (lambda), sd, peak minute(s) ---
+summary_day <- arrivals %>%
+  group_by(day) %>%
+  summarise(
+    total = sum(count),
+    minutes_observed = n(),
+    lambda = round(mean(count), 4),       # dosen per menit
+    sd_per_min = round(sd(count), 4),
+    peak_count = max(count),
+    peak_times = paste(time[count == max(count)], collapse = "; ")
+  ) %>%
+  arrange(day)
+
+# --- 7) Asumsi mu (laju pelayanan per menit). Ubah jika kamu punya data service time ---
+# Default: mu = 1 (1 dosen per menit). Jika kamu ukur service time (mis. 15 detik => mu=4), ubah di sini.
+mu_default <- 1
+summary_day <- summary_day %>%
+  mutate(mu = mu_default)
+
+# --- 8) Hitung parameter M/M/1 untuk tiap hari ---
+# gunakan rumus: rho = lambda/mu, Lq = rho^2/(1-rho), Ls = rho/(1-rho), Wq = Lq/lambda, Ws = Ls/lambda
+summary_day <- summary_day %>%
+  mutate(
+    rho = round(lambda / mu, 3),
+    Lq = round((rho^2) / (1 - rho), 3),
+    Ls = round(rho / (1 - rho), 3),
+    Wq = round(ifelse(lambda>0, Lq / lambda, NA), 3),
+    Ws = round(ifelse(lambda>0, Ls / lambda, NA), 3)
+  )
+
+# --- 9) Simpan hasil dan tampilkan ---
+write.csv(arrivals, "arrivals_long_format.csv", row.names = FALSE)
+write.csv(summary_day, "summary_per_day_metrics.csv", row.names = FALSE)
+
+cat("Proses selesai. File 'arrivals_long_format.csv' dan 'summary_per_day_metrics.csv' disimpan di working directory.\n\n")
+print(summary_day)
+
+# --- 10) Jika mau, tampilkan hasil dalam format tabel rapi ---
+library(knitr)
+kable(summary_day)
+```
+
+```{r}
+# -------------------------
+# DATA INPUT (dari hasil perhitunganmu)
+# -------------------------
+hari   <- c("Senin", "Selasa", "Rabu", "Kamis")
+
+lambda <- c(0.4215, 0.3636, 0.4132, 0.3554)   # λ per menit
+mu     <- c(1.0, 1.0, 1.0, 1.0)               # μ = 1 dosen per menit
+
+# -------------------------
+# RUMUS M/M/1 QUEUE
+# -------------------------
+rho <- lambda / mu
+Lq  <- (rho^2) / (1 - rho)
+Ls  <- rho / (1 - rho)
+Wq  <- Lq / lambda
+Ws  <- Ls / lambda
+
+# -------------------------
+# FORMAT DENGAN KOMA
+# -------------------------
+fmt <- function(x){
+  format(round(x, 3), decimal.mark = ",", big.mark = ".")
+}
+
+hasil <- data.frame(
+  Hari  = hari,
+  lambda = fmt(lambda),
+  mu     = fmt(mu),
+  rho    = fmt(rho),
+  Lq     = fmt(Lq),
+  Ls     = fmt(Ls),
+  Wq_menit = fmt(Wq),
+  Ws_menit = fmt(Ws)
+)
+
+print(hasil)
+
+```
+
+
